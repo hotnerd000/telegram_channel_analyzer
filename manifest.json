@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "Telegram Job Deduper",
+  "version": "1.0.0",
+  "description": "Hide repeated posts in @HaiWaiITJob (海外技术求职招聘) and list only new jobs. Processing stays in your browser.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": ["https://web.telegram.org/*"],
+  "action": {
+    "default_title": "Telegram Job Deduper",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://web.telegram.org/*"],
+      "js": ["dedupe.js", "content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
