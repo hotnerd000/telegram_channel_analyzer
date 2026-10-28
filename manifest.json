@@ -15,7 +15,7 @@
   "content_scripts": [
     {
       "matches": ["https://web.telegram.org/*"],
-      "js": ["dedupe.js", "content.js"],
+      "js": ["config.js", "dedupe.js", "content.js"],
       "css": ["content.css"],
       "run_at": "document_idle"
     }

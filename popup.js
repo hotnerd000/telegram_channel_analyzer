@@ -1,3 +1,5 @@
+const CHANNEL = globalThis.TJF_CONFIG;
+
 const DEFAULTS = {
   enabled: true,
   hideDuplicates: true,
@@ -27,10 +29,14 @@ function save(partial) {
   });
 }
 
+document.getElementById("channelHint").innerHTML =
+  `Follows <b>${CHANNEL.title}</b> (@${CHANNEL.username}). Open that channel in Telegram Web, scroll once, then mark the current posts as read.`;
+document.getElementById("open").textContent = `Open @${CHANNEL.username}`;
+
 chrome.storage.local.get("settings", ({ settings }) => apply(settings));
 
 document.getElementById("open").addEventListener("click", () => {
-  const fallback = "https://web.telegram.org/a/#@HaiWaiITJob";
+  const fallback = `https://web.telegram.org/a/#@${CHANNEL.username}`;
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     const tab = tabs[0];
     if (!tab?.id) {
@@ -41,7 +47,7 @@ document.getElementById("open").addEventListener("click", () => {
       if (!chrome.runtime.lastError) return;
       if (tab.url && tab.url.includes("web.telegram.org")) {
         const path = tab.url.includes("/k/") ? "/k/" : "/a/";
-        chrome.tabs.update(tab.id, { url: `https://web.telegram.org${path}#@HaiWaiITJob` });
+        chrome.tabs.update(tab.id, { url: `https://web.telegram.org${path}#@${CHANNEL.username}` });
         return;
       }
       chrome.tabs.create({ url: fallback });

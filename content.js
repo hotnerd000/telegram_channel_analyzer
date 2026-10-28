@@ -57,8 +57,8 @@
     return `chat:${chatKey}`;
   }
 
-  const TARGET_USERNAME = "HaiWaiITJob";
-  const TARGET_TITLE = "海外技术求职招聘";
+  const TARGET_USERNAME = globalThis.TJF_CONFIG.username;
+  const TARGET_TITLE = globalThis.TJF_CONFIG.title;
 
   function getChatTitle() {
     const scopes = [
@@ -449,7 +449,7 @@
     root.classList.toggle("tjf-wrong-chat", !inChannel);
     root.hidden = !state.settings.enabled;
     const titleEl = root.querySelector(".tjf-title");
-    if (titleEl) titleEl.textContent = inChannel ? "New jobs" : "@HaiWaiITJob";
+    if (titleEl) titleEl.textContent = inChannel ? "New jobs" : `@${TARGET_USERNAME}`;
 
     const count = root.querySelector(".tjf-count");
     if (count) count.textContent = String(state.pending.length);
@@ -514,7 +514,7 @@
       </div>
       <div class="tjf-body">
         <div class="tjf-gate">
-          <p>This filter follows <b>海外技术求职招聘</b>, the channel @HaiWaiITJob.</p>
+          <p>This filter follows <b>${escapeHtml(TARGET_TITLE)}</b>, the channel @${escapeHtml(TARGET_USERNAME)}.</p>
           <button type="button" class="tjf-btn" data-act="open">Open channel</button>
         </div>
         <div class="tjf-app">
