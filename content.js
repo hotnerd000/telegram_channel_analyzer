@@ -188,6 +188,30 @@
     return /service|ActionMessage|unread-separator/i.test(cls);
   }
 
+  function messagePostedAt(el) {
+    const timeEl = el.querySelector("time[datetime], .message-time, .time, time");
+    if (!timeEl) return "";
+    const datetime = timeEl.getAttribute("datetime");
+    if (datetime) {
+      const parsed = Date.parse(datetime);
+      if (!Number.isNaN(parsed)) {
+        return new Date(parsed).toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        });
+      }
+    }
+    const titled = (
+      timeEl.getAttribute("title") ||
+      timeEl.querySelector("[title]")?.getAttribute("title") ||
+      ""
+    ).replace(/\s+/g, " ").trim();
+    if (titled) return titled;
+    return (timeEl.innerText || "").replace(/\s+/g, " ").trim();
+  }
+
   function messageText(el) {
     let source = null;
     for (const sel of CONTENT_SELECTORS) {
@@ -237,6 +261,7 @@
       messageId: record.messageId,
       title: record.title,
       text: record.text,
+      postedAt: record.postedAt || "",
       at: Date.now(),
     });
     if (state.pending.length > MAX_PENDING) {
@@ -326,11 +351,22 @@
         } else {
           claimed.add(key);
           status = result.match.entry.status === "seen" ? "seen" : "new";
-          if (status === "new" && id) {
+          if (status === "new") {
             const stored = state.pending.find((item) => item.norm === key);
-            if (stored && !stored.messageId) {
-              stored.messageId = id;
-              scheduleSave();
+            if (stored) {
+              let dirty = false;
+              if (id && !stored.messageId) {
+                stored.messageId = id;
+                dirty = true;
+              }
+              if (!stored.postedAt) {
+                const postedAt = messagePostedAt(el);
+                if (postedAt) {
+                  stored.postedAt = postedAt;
+                  dirty = true;
+                }
+              }
+              if (dirty) scheduleSave();
             }
           }
         }
@@ -343,6 +379,7 @@
           messageId: id,
           title: firstLine(text),
           text: previewText(text),
+          postedAt: messagePostedAt(el),
         });
       }
 
@@ -458,8 +495,14 @@
     const onlyNew = root.querySelector('[data-setting="onlyNew"]');
     const threshold = root.querySelector(".tjf-range");
     const thresholdLabel = root.querySelector(".tjf-range-label");
-    if (hideDup) hideDup.checked = state.settings.hideDuplicates;
-    if (onlyNew) onlyNew.checked = state.settings.onlyNew;
+    if (hideDup) {
+      hideDup.checked = state.settings.hideDuplicates;
+      hideDup.closest(".tjf-toggle")?.classList.toggle("tjf-on", state.settings.hideDuplicates);
+    }
+    if (onlyNew) {
+      onlyNew.checked = state.settings.onlyNew;
+      onlyNew.closest(".tjf-toggle")?.classList.toggle("tjf-on", state.settings.onlyNew);
+    }
     if (threshold && document.activeElement !== threshold) {
       threshold.value = String(Math.round(state.settings.threshold * 100));
     }
@@ -477,7 +520,7 @@
     if (!list || !inChannel) return;
     const items = state.settings.enabled ? visiblePending() : [];
     const listKey = `${state.settings.enabled ? "1" : "0"}:${items
-      .map((item) => `${item.messageId || ""}:${item.title}:${item.text.length}`)
+      .map((item) => `${item.messageId || ""}:${item.title}:${item.text.length}:${item.postedAt || ""}`)
       .join("|")}`;
     if (list.dataset.key === listKey) return;
     list.dataset.key = listKey;
@@ -493,6 +536,7 @@
       .map(
         (item) => `<article class="tjf-card tjf-card-new">
           <div class="tjf-card-title">${escapeHtml(item.title || "Job")}</div>
+          ${item.postedAt ? `<div class="tjf-card-time">${escapeHtml(item.postedAt)}</div>` : ""}
           <div class="tjf-card-text">${escapeHtml(item.text || "")}</div>
           <div class="tjf-card-actions">
             <button type="button" data-act="jump" data-id="${escapeHtml(item.messageId || "")}">Show in chat</button>
@@ -558,6 +602,7 @@
     root.addEventListener("change", (event) => {
       const setting = event.target.getAttribute("data-setting");
       if (setting) {
+        event.target.closest(".tjf-toggle")?.classList.toggle("tjf-on", event.target.checked);
         saveSettings({ [setting]: event.target.checked });
         scheduleScan();
       }
