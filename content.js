@@ -52,6 +52,93 @@
   let root = null;
   let scanTimer = 0;
   let saveTimer = 0;
+  let chatTimer = 0;
+  let observer = null;
+  let stopped = false;
+
+  function contextAlive() {
+    try {
+      if (!chrome.runtime?.id) return false;
+      chrome.runtime.getManifest();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function contextGone(error) {
+    return /Extension context invalidated/i.test(String(error?.message || error));
+  }
+
+  function stopWatching() {
+    if (stopped) return;
+    stopped = true;
+    clearTimeout(scanTimer);
+    clearTimeout(saveTimer);
+    clearInterval(chatTimer);
+    observer?.disconnect();
+    window.removeEventListener("scroll", scheduleScan, true);
+    window.removeEventListener("hashchange", onHashChange);
+  }
+
+  function storageGet(keys) {
+    return new Promise((resolve) => {
+      if (!contextAlive()) {
+        stopWatching();
+        resolve({});
+        return;
+      }
+      try {
+        chrome.storage.local.get(keys, (data) => {
+          try {
+            if (chrome.runtime.lastError) {
+              stopWatching();
+              resolve({});
+              return;
+            }
+            resolve(data || {});
+          } catch {
+            stopWatching();
+            resolve({});
+          }
+        });
+      } catch {
+        stopWatching();
+        resolve({});
+      }
+    });
+  }
+
+  function storageSet(payload) {
+    if (stopped || !contextAlive()) {
+      stopWatching();
+      return;
+    }
+    try {
+      const pending = chrome.storage.local.set(payload);
+      if (pending && typeof pending.catch === "function") pending.catch(() => stopWatching());
+    } catch {
+      stopWatching();
+    }
+  }
+
+  function sendBadge(count) {
+    if (stopped || !contextAlive()) {
+      stopWatching();
+      return;
+    }
+    try {
+      chrome.runtime.sendMessage({ type: "badge", count }, () => {
+        try {
+          if (chrome.runtime.lastError) stopWatching();
+        } catch {
+          stopWatching();
+        }
+      });
+    } catch {
+      stopWatching();
+    }
+  }
 
   function storageKey(chatKey) {
     return `chat:${chatKey}`;
@@ -123,42 +210,35 @@
     return (r * 299 + g * 587 + b * 114) / 1000 < 140;
   }
 
-  function loadSettings() {
-    return new Promise((resolve) => {
-      chrome.storage.local.get("settings", ({ settings }) => {
-        state.settings = { ...DEFAULTS, ...(settings || {}) };
-        resolve(state.settings);
-      });
-    });
+  async function loadSettings() {
+    const data = await storageGet("settings");
+    state.settings = { ...DEFAULTS, ...(data.settings || {}) };
+    return state.settings;
   }
 
-  function loadChat(chatKey) {
-    return new Promise((resolve) => {
-      chrome.storage.local.get(storageKey(chatKey), (data) => {
-        const stored = data[storageKey(chatKey)] || {};
-        state.seen = Array.isArray(stored.seen) ? stored.seen : [];
-        state.pending = Array.isArray(stored.pending) ? stored.pending : [];
-        resolve();
-      });
-    });
+  async function loadChat(chatKey) {
+    const data = await storageGet(storageKey(chatKey));
+    const stored = data[storageKey(chatKey)] || {};
+    state.seen = Array.isArray(stored.seen) ? stored.seen : [];
+    state.pending = Array.isArray(stored.pending) ? stored.pending : [];
   }
 
   function scheduleSave() {
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      if (!state.chatKey) return;
+      if (stopped || !state.chatKey) return;
       const payload = {};
       payload[storageKey(state.chatKey)] = {
         seen: state.seen.slice(-MAX_SEEN),
         pending: state.pending.slice(-MAX_PENDING),
       };
-      chrome.storage.local.set(payload);
+      storageSet(payload);
     }, 400);
   }
 
   function saveSettings(partial) {
     state.settings = { ...state.settings, ...partial };
-    chrome.storage.local.set({ settings: state.settings });
+    storageSet({ settings: state.settings });
   }
 
   function collectMessages() {
@@ -311,12 +391,29 @@
   }
 
   function scan() {
+    if (stopped) return;
+    try {
+      scanNow();
+    } catch (error) {
+      if (contextGone(error) || !contextAlive()) {
+        stopWatching();
+        return;
+      }
+      throw error;
+    }
+  }
+
+  function scanNow() {
+    if (!contextAlive()) {
+      stopWatching();
+      return;
+    }
     if (!state.ready || !state.settings.enabled || !isTargetChat()) {
       document.querySelectorAll(".tjf-new, .tjf-dup, .tjf-seen").forEach(clearMark);
       state.hiddenDupes = 0;
       renderPanel();
       if (!isTargetChat()) {
-        chrome.runtime.sendMessage({ type: "badge", count: 0 }).catch(() => {});
+        sendBadge(0);
       }
       return;
     }
@@ -389,7 +486,7 @@
 
     state.hiddenDupes = hidden;
     renderPanel();
-    chrome.runtime.sendMessage({ type: "badge", count: state.pending.length }).catch(() => {});
+    sendBadge(state.pending.length);
   }
 
   function scheduleScan() {
@@ -407,7 +504,7 @@
 
   function visiblePending() {
     const q = (root?.querySelector(".tjf-search")?.value || "").trim().toLowerCase();
-    const items = state.pending.slice().reverse();
+    const items = state.pending.slice();
     if (!q) return items;
     return items.filter((item) => `${item.title}\n${item.text}`.toLowerCase().includes(q));
   }
@@ -639,7 +736,15 @@
     });
   }
 
+  function onHashChange() {
+    onChatMaybeChanged();
+  }
+
   async function onChatMaybeChanged() {
+    if (!contextAlive()) {
+      stopWatching();
+      return;
+    }
     const key = getChatKey();
     if (key === state.chatKey) return;
     state.chatKey = key;
@@ -657,7 +762,9 @@
     renderPanel();
     scheduleScan();
 
-    const observer = new MutationObserver((mutations) => {
+    observer = new MutationObserver((mutations) => {
+      if (stopped) return;
+      try {
       for (const mutation of mutations) {
         const target = mutation.target.nodeType === 1 ? mutation.target : mutation.target.parentElement;
         if (!target || target.closest("#tjf-root") || target.closest(".tjf-chip")) continue;
@@ -672,6 +779,13 @@
         scheduleScan();
         return;
       }
+      } catch (error) {
+        if (contextGone(error) || !contextAlive()) {
+          stopWatching();
+          return;
+        }
+        throw error;
+      }
     });
     observer.observe(document.documentElement, {
       childList: true,
@@ -681,20 +795,28 @@
       attributeFilter: ["data-message-id", "data-mid", "id"],
     });
     window.addEventListener("scroll", scheduleScan, true);
-    window.addEventListener("hashchange", () => onChatMaybeChanged());
-    setInterval(onChatMaybeChanged, 1500);
+    window.addEventListener("hashchange", onHashChange);
+    chatTimer = setInterval(onChatMaybeChanged, 1500);
 
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local" || !changes.settings) return;
-      state.settings = { ...DEFAULTS, ...changes.settings.newValue };
-      scheduleScan();
-    });
+    if (!contextAlive()) {
+      stopWatching();
+      return;
+    }
+    try {
+      chrome.storage.onChanged.addListener((changes, area) => {
+        if (stopped || area !== "local" || !changes.settings) return;
+        state.settings = { ...DEFAULTS, ...changes.settings.newValue };
+        scheduleScan();
+      });
 
-    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
-      if (msg?.type !== "open-channel") return;
-      openTargetChannel();
-      sendResponse({ ok: true });
-    });
+      chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+        if (msg?.type !== "open-channel") return;
+        openTargetChannel();
+        sendResponse({ ok: true });
+      });
+    } catch {
+      stopWatching();
+    }
   }
 
   if (document.readyState === "loading") {
